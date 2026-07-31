@@ -19,6 +19,46 @@ Angka yang menunjuk "ke/dari mana" data mengalir. Tiga yang selalu tersedia:
 Cara ingat: **0 masuk, 1 & 2 keluar.** stdout untuk hasil normal, stderr untuk
 pesan kesalahan (supaya bisa dipisah, misal `program 2> error.txt`).
 
+### Contoh tiap FD (32-bit)
+
+FD 0 (stdin) — baca dari keyboard:
+
+```nasm
+    mov eax, 3          ; sys_read
+    mov ebx, 0          ; ← fd 0 = stdin
+    mov ecx, buffer
+    mov edx, 100
+    int 0x80
+```
+
+FD 1 (stdout) — hasil normal ke layar:
+
+```nasm
+    mov eax, 4          ; sys_write
+    mov ebx, 1          ; ← fd 1 = stdout
+    mov ecx, pesan
+    mov edx, panjang
+    int 0x80
+```
+
+FD 2 (stderr) — pesan error ke layar:
+
+```nasm
+    mov eax, 4          ; sys_write
+    mov ebx, 2          ; ← fd 2 = stderr
+    mov ecx, err
+    mov edx, errlen
+    int 0x80
+```
+
+Beda FD 1 vs 2 baru terasa saat aliran dipisah di terminal:
+
+```bash
+./program 1> hasil.txt 2> error.txt
+```
+
+Yang lewat stdout masuk `hasil.txt`, yang lewat stderr masuk `error.txt`.
+
 ---
 
 ## 2. Cara memanggil syscall
@@ -142,7 +182,75 @@ read(fd, buffer, maks_byte)  →  mengembalikan jumlah byte terbaca
 
 ---
 
-## 6. Contoh utuh — tanya nama, lalu tampilkan (64-bit)
+## 6. open & close — bekerja dengan file
+
+`open` membuka/membuat file dan **mengembalikan file descriptor baru** di EAX/RAX.
+`close` menutupnya. Keduanya paling jelas ditunjukkan bersama.
+
+```
+open(path, flags, izin)  →  mengembalikan fd baru (biasanya 3, 4, ...)
+close(fd)
+```
+
+Contoh utuh (32-bit) — tulis teks ke file `hasil.txt`:
+
+```nasm
+section .data
+    namafile db "hasil.txt", 0      ; WAJIB diakhiri 0 (null-terminated)
+    isi      db "Halo dari assembly!", 0xA
+    isilen   equ $ - isi
+
+section .text
+    global _start
+_start:
+    ; open("hasil.txt", O_WRONLY|O_CREAT|O_TRUNC, 0644)
+    mov eax, 5
+    mov ebx, namafile
+    mov ecx, 0x241          ; flag: tulis + buat kalau belum ada + kosongkan
+    mov edx, 0x1A4          ; izin 0644 (rw-r--r--)
+    int 0x80
+    mov esi, eax            ; ← SIMPAN fd hasil open!
+
+    ; write ke file (pakai fd dari open, BUKAN 1)
+    mov eax, 4
+    mov ebx, esi
+    mov ecx, isi
+    mov edx, isilen
+    int 0x80
+
+    ; close(fd)
+    mov eax, 6
+    mov ebx, esi
+    int 0x80
+
+    ; exit(0)
+    mov eax, 1
+    xor ebx, ebx
+    int 0x80
+```
+
+Dua jebakan yang wajib diingat:
+
+1. **`open` memberi fd baru di EAX** — simpan (di contoh ke `esi`) untuk dipakai
+   `write` dan `close`. Kalau kamu tulis `mov ebx, 1`, tulisannya malah ke layar,
+   bukan ke file.
+2. **Path harus diakhiri byte `0`** (`db "hasil.txt", 0`). Kernel membaca nama
+   sampai ketemu null; tanpa `, 0` bisa error atau membuka file bernama sampah.
+
+Angka flag `open` yang sering dipakai (32 & 64-bit sama):
+
+```
+0x001  O_WRONLY   hanya tulis
+0x002  O_RDWR     baca + tulis
+0x040  O_CREAT    buat kalau belum ada
+0x200  O_TRUNC    kosongkan isi lama
+0x400  O_APPEND   tambah di akhir
+gabung dgn OR, mis. 0x241 = O_WRONLY|O_CREAT|O_TRUNC
+```
+
+---
+
+## 7. Contoh utuh — tanya nama, lalu tampilkan (64-bit)
 
 ```nasm
 section .bss
@@ -198,7 +306,7 @@ Versi 32-bit: ganti register ke `eax/ebx/ecx/edx`, nomor jadi read=3/write=4/exi
 
 ---
 
-## 7. Cheat Sheet Ringkas
+## 8. Cheat Sheet Ringkas
 
 ### File descriptor
 ```
@@ -236,7 +344,16 @@ read(fd=0, buffer, maks)            → menerima, RAX = byte terbaca
 - syscall   ↔  elf64  ↔  RAX/RDI...   (jangan campur)
 - nomor syscall 32-bit ≠ 64-bit — selalu cek modenya
 - buffer untuk read disiapkan di .bss pakai resb
+- open memberi fd baru di EAX/RAX — simpan sebelum write/close
+- path file harus null-terminated: db "nama", 0
 ```
+
+### Perintah build (WAJIB cocok!)
+```
+32-bit:  nasm -f elf32 f.asm -o f.o  &&  ld -m elf_i386 -o f f.o
+64-bit:  nasm -f elf64 f.asm -o f.o  &&  ld -o f f.o
+```
+Lupa `-m elf_i386` di jalur 32-bit → error "i386 incompatible with i386:x86-64".
 
 ---
 
